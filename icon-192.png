@@ -1,0 +1,1330 @@
+import { useState, useRef, useCallback } from "react";
+import Head from "next/head";
+
+const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
+const LOGO_SRC = "/logo.png";
+
+/* ─── Design Tokens ──────────────────────────────────────────────── */
+const T = {
+  cream:    "#FAF6F0",
+  beige:    "#F0E8DA",
+  sand:     "#E0D0BA",
+  terra:    "#C17A4A",
+  terraLt:  "#D9956A",
+  terraXlt: "#EEC9A8",
+  olive:    "#6B7C5C",
+  oliveLt:  "#8B9E78",
+  oliveXlt: "#C8D5BB",
+  bark:     "#4A3728",
+  barkMd:   "#7A5C42",
+  fog:      "#9C8E80",
+  white:    "#FFFDF9",
+  red:      "#C0504A",
+  amber:    "#C49A3C",
+  green:    "#5A8A6A",
+  shadow:   "rgba(74,55,40,0.10)",
+  shadowMd: "rgba(74,55,40,0.18)",
+};
+
+const FONT_DISPLAY = "'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif";
+const FONT_BODY    = "'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif";
+
+/* ─── Data ───────────────────────────────────────────────────────── */
+const FOOD_CATEGORIES = {
+  野菜:   { icon:"🥦", color: T.olive   },
+  果物:   { icon:"🍎", color: T.terra   },
+  肉類:   { icon:"🥩", color: T.red     },
+  魚介類: { icon:"🐟", color: "#5A7EA8" },
+  乳製品: { icon:"🧀", color: T.amber   },
+  飲料:   { icon:"🥛", color: "#7A9EB0" },
+  調味料: { icon:"🧂", color: T.fog     },
+  その他: { icon:"📦", color: T.sand    },
+};
+const MEMBER_COLORS  = [T.terra, T.olive, "#5A7EA8", T.amber, "#9B7EB8", T.red];
+const MEMBER_AVATARS = ["🐻","🐼","🐨","🦊","🐰","🐱","🐶","🐸","🐮","🐷","🐯","🦁","🐧","🐺","🦔","🐭"];
+
+function daysFromNow(n){ return new Date(Date.now()+n*86400000).toISOString().split("T")[0]; }
+function minutesAgo(n) { return new Date(Date.now()-n*60000).toISOString(); }
+function getExpiry(d){
+  if (!d) return "fresh";
+  const diff = Math.ceil((new Date(d)-new Date())/86400000);
+  return diff<0?"expired":diff<=3?"soon":"fresh";
+}
+function fmtDate(d){
+  if (!d) return "未設定";
+  const dt=new Date(d); return `${dt.getMonth()+1}月${dt.getDate()}日`;
+}
+function relTime(iso){
+  const m=Math.round((Date.now()-new Date(iso))/60000);
+  return m<1?"たった今":m<60?`${m}分前`:m<1440?`${Math.floor(m/60)}時間前`:`${Math.floor(m/1440)}日前`;
+}
+
+const DEMO_ITEMS = [
+  {id:"d1",name:"牛乳",    category:"乳製品",quantity:"1L",   expiry:daysFromNow(2), addedBy:"カズ",   imageData:null},
+  {id:"d2",name:"ほうれん草",category:"野菜",  quantity:"1束",  expiry:daysFromNow(4), addedBy:"カズ",   imageData:null},
+  {id:"d3",name:"鶏むね肉",category:"肉類",  quantity:"300g", expiry:daysFromNow(1), addedBy:"さくら", imageData:null},
+  {id:"d4",name:"卵",      category:"乳製品",quantity:"6個",  expiry:daysFromNow(14),addedBy:"さくら", imageData:null},
+  {id:"d5",name:"トマト",  category:"野菜",  quantity:"2個",  expiry:daysFromNow(5), addedBy:"カズ",   imageData:null},
+];
+const DEMO_MEMBERS = [
+  {id:"m1",name:"カズ",  avatar:"🐻",color:T.terra,role:"owner"},
+  {id:"m2",name:"さくら",avatar:"🐰",color:T.olive,role:"member"},
+];
+const DEMO_ACTIVITY = [
+  {id:"a1",memberId:"m2",memberName:"さくら",action:"追加",item:"鶏むね肉",time:minutesAgo(12)},
+  {id:"a2",memberId:"m1",memberName:"カズ",  action:"追加",item:"牛乳",    time:minutesAgo(43)},
+  {id:"a3",memberId:"m2",memberName:"さくら",action:"消費",item:"レタス",  time:minutesAgo(120)},
+];
+const DEMO_SHOPPING = [
+  {id:"s1",name:"醤油",  addedBy:"さくら",addedById:"m2",done:false},
+  {id:"s2",name:"豆腐",  addedBy:"カズ",  addedById:"m1",done:false},
+  {id:"s3",name:"バター",addedBy:"さくら",addedById:"m2",done:true},
+];
+
+/* ─── Global styles injected once ───────────────────────────────── */
+const CSS = `
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  ::-webkit-scrollbar { display: none; }
+  @keyframes fadeUp   { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes spin     { to{transform:rotate(360deg)} }
+  @keyframes pulse    { 0%,100%{transform:scale(1)} 50%{transform:scale(1.08)} }
+  @keyframes shimmer  { 0%{background-position:-200px 0} 100%{background-position:200px 0} }
+  .card-hover { transition: transform .2s, box-shadow .2s; }
+  .card-hover:active { transform: scale(0.97); }
+`;
+
+/* ─── Atoms ──────────────────────────────────────────────────────── */
+function GStyles(){ return <style>{CSS}</style>; }
+
+function StatusBar(){
+  const n=new Date();
+  return (
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+      padding:"14px 22px 6px",background:T.cream}}>
+      <span style={{fontFamily:FONT_BODY,fontSize:13,fontWeight:700,color:T.bark}}>
+        {String(n.getHours()).padStart(2,"0")}:{String(n.getMinutes()).padStart(2,"0")}
+      </span>
+      <div style={{display:"flex",gap:5,alignItems:"center"}}>
+        <span style={{fontSize:11,color:T.fog}}>●●●</span>
+        <span style={{fontSize:11,color:T.fog}}>WiFi</span>
+        <span style={{fontSize:13}}>🔋</span>
+      </div>
+    </div>
+  );
+}
+
+/* Warm woodgrain-ish decorative stripe */
+function WoodStripe(){
+  return (
+    <div style={{height:3,background:`linear-gradient(90deg,${T.sand},${T.terra}44,${T.sand},${T.barkMd}33,${T.sand})`,opacity:.6}}/>
+  );
+}
+
+function Avatar({member,size=28,online=false}){
+  const pad = size * 0.13;
+  return (
+    <div style={{position:"relative",flexShrink:0}}>
+      <div style={{
+        width:size,height:size,borderRadius:"50%",
+        background:`radial-gradient(circle at 35% 30%, ${member.color}55, ${member.color}cc)`,
+        boxShadow:`0 2px 8px ${member.color}55, inset 0 1px 2px rgba(255,255,255,0.4)`,
+        display:"flex",alignItems:"center",justifyContent:"center",
+        fontSize:size * 0.58,
+        border:`2px solid ${member.color}`,
+      }}>
+        {member.avatar}
+      </div>
+      {online && (
+        <div style={{
+          position:"absolute",bottom:0,right:0,
+          width:size*.28,height:size*.28,borderRadius:"50%",
+          background:"linear-gradient(135deg,#7CCC8E,#4A9E5C)",
+          border:`1.5px solid ${T.white}`,
+          boxShadow:"0 1px 4px rgba(0,0,0,0.2)",
+        }}/>
+      )}
+    </div>
+  );
+}
+
+function Pill({label,color,bg}){
+  return (
+    <span style={{background:bg||`${color}18`,color:color||T.bark,
+      padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700,
+      fontFamily:FONT_BODY,flexShrink:0,letterSpacing:.3}}>
+      {label}
+    </span>
+  );
+}
+
+function SectionTitle({children,emoji}){
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+      {emoji && <span style={{fontSize:16}}>{emoji}</span>}
+      <span style={{fontFamily:FONT_DISPLAY,fontSize:16,color:T.bark,
+        letterSpacing:.3}}>
+        {children}
+      </span>
+      <div style={{flex:1,height:1,background:`linear-gradient(90deg,${T.sand},transparent)`,marginLeft:6}}/>
+    </div>
+  );
+}
+
+function PrimaryBtn({children,onClick,disabled,gradient}){
+  const bg = disabled
+    ? T.sand
+    : gradient||`linear-gradient(135deg,${T.terra},${T.barkMd})`;
+  return (
+    <button onClick={onClick} disabled={disabled} style={{
+      width:"100%",padding:"15px",borderRadius:20,border:"none",
+      background:bg,color:disabled?T.fog:T.white,
+      fontWeight:700,fontSize:15,cursor:disabled?"not-allowed":"pointer",
+      fontFamily:FONT_BODY,letterSpacing:.4,
+      boxShadow:disabled?"none":`0 6px 24px ${T.shadowMd}`,
+      transition:"opacity .2s,transform .15s",
+    }}
+    onMouseDown={e=>{if(!disabled)e.currentTarget.style.transform="scale(0.98)"}}
+    onMouseUp={e=>{e.currentTarget.style.transform="scale(1)"}}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ─── TabBar ─────────────────────────────────────────────────────── */
+function TabBar({tab,setTab,badge}){
+  const tabs=[
+    {id:"fridge",icon:"❄️",label:"冷蔵庫"},
+    {id:"scan",  icon:"📷",label:"スキャン"},
+    {id:"menu",  icon:"🍽️",label:"献立"},
+    {id:"share", icon:"🏡",label:"家族"},
+    {id:"shop",  icon:"🛒",label:"お買い物",badge},
+  ];
+  return (
+    <div style={{
+      background:T.white,borderTop:`1px solid ${T.sand}`,
+      padding:"8px 4px 20px",display:"flex",justifyContent:"space-around",
+      position:"sticky",bottom:0,zIndex:50,
+      boxShadow:`0 -4px 20px ${T.shadow}`,
+    }}>
+      {tabs.map(t=>{
+        const active=tab===t.id;
+        return (
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{
+            background:"none",border:"none",cursor:"pointer",
+            display:"flex",flexDirection:"column",alignItems:"center",gap:3,
+            padding:"5px 8px",position:"relative",
+            transition:"transform .15s",
+            transform:active?"scale(1.08)":"scale(1)",
+          }}>
+            {active && (
+              <div style={{
+                position:"absolute",top:-8,left:"50%",transform:"translateX(-50%)",
+                width:36,height:36,borderRadius:"50%",
+                background:`${T.terra}15`,
+              }}/>
+            )}
+            <span style={{fontSize:19,position:"relative"}}>{t.icon}</span>
+            <span style={{
+              fontSize:9,fontWeight:700,letterSpacing:.4,fontFamily:FONT_BODY,
+              color:active?T.terra:T.fog,position:"relative",
+            }}>{t.label}</span>
+            {t.badge>0 && (
+              <div style={{position:"absolute",top:2,right:2,
+                background:T.red,color:"#fff",borderRadius:"50%",
+                width:15,height:15,fontSize:9,fontWeight:900,
+                display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {t.badge}
+              </div>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ─── Setup Screen ───────────────────────────────────────────────── */
+function SetupScreen({onComplete}){
+  const [step,setStep]=useState("welcome");
+  const [name,setName]=useState("");
+  const [avatar,setAvatar]=useState("🐻");
+
+  if (step==="welcome") return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",
+      justifyContent:"center",padding:"32px 28px",gap:28,
+      background:`linear-gradient(160deg,${T.beige},${T.cream})`,
+    }}>
+      {/* Logo */}
+      <div style={{textAlign:"center"}}>
+        <img src={LOGO_SRC} alt="Stocky" style={{
+          width:210, height:210, objectFit:"contain",
+          filter:"drop-shadow(0 8px 24px rgba(193,122,74,0.25))",
+          animation:"pulse 3s ease-in-out infinite",
+        }}/>
+      </div>
+
+      <div style={{textAlign:"center",marginTop:-8}}>
+        <p style={{fontSize:14,color:T.barkMd,marginTop:4,lineHeight:1.8,
+          fontFamily:FONT_BODY,fontWeight:400}}>
+          家族・パートナーと食材を共有して<br/>毎日の食卓をもっと豊かに
+        </p>
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:12,width:"100%"}}>
+        <PrimaryBtn onClick={()=>setStep("name")}>
+          ✨ はじめる
+        </PrimaryBtn>
+        <button onClick={()=>onComplete({members:DEMO_MEMBERS,me:DEMO_MEMBERS[0]})}
+          style={{background:"none",border:`1.5px solid ${T.sand}`,
+            borderRadius:20,padding:"13px",color:T.barkMd,fontSize:14,
+            fontWeight:700,cursor:"pointer",fontFamily:FONT_BODY,letterSpacing:.3}}>
+          デモで試してみる →
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{flex:1,padding:"28px 24px",display:"flex",flexDirection:"column",
+      gap:22,background:T.cream}}>
+      <div>
+        <h2 style={{margin:0,fontFamily:FONT_DISPLAY,fontSize:24,
+          fontWeight:600,color:T.bark}}>
+          自己紹介してね
+        </h2>
+        <p style={{margin:"6px 0 0",fontSize:13,color:T.fog,fontFamily:FONT_BODY}}>
+          あなたのアバターとニックネームを設定しましょう
+        </p>
+      </div>
+      <div>
+        <p style={{margin:"0 0 10px",fontSize:12,fontWeight:700,
+          color:T.barkMd,fontFamily:FONT_BODY,letterSpacing:.5}}>
+          アバターを選ぶ
+        </p>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(8,1fr)",gap:8}}>
+          {MEMBER_AVATARS.map(a=>(
+            <button key={a} onClick={()=>setAvatar(a)} style={{
+              fontSize:28,borderRadius:18,width:"100%",aspectRatio:"1",
+              cursor:"pointer",border:"none",
+              background: avatar===a
+                ? `radial-gradient(circle at 35% 30%,${T.terraXlt},${T.terra}88)`
+                : T.beige,
+              boxShadow: avatar===a ? `0 3px 10px ${T.terra}44` : "none",
+              transform: avatar===a ? "scale(1.12)" : "scale(1)",
+              transition:"all .18s",
+            }}>{a}</button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <p style={{margin:"0 0 10px",fontSize:12,fontWeight:700,
+          color:T.barkMd,fontFamily:FONT_BODY,letterSpacing:.5}}>
+          ニックネーム
+        </p>
+        <input value={name} onChange={e=>setName(e.target.value)}
+          placeholder="例：カズ、さくら、パパ…"
+          style={{width:"100%",padding:"14px 16px",borderRadius:16,
+            border:`1.5px solid ${T.sand}`,fontSize:16,fontFamily:FONT_BODY,
+            outline:"none",background:T.white,color:T.bark,
+            boxShadow:`inset 0 2px 6px ${T.shadow}`}}/>
+      </div>
+      <PrimaryBtn disabled={!name.trim()} onClick={()=>{
+        onComplete({
+          members:[{id:"m-"+Date.now(),name:name.trim(),avatar,color:MEMBER_COLORS[0],role:"owner"}],
+          me:{id:"m-"+Date.now(),name:name.trim(),avatar,color:MEMBER_COLORS[0],role:"owner"},
+        });
+      }}>冷蔵庫を作成する →</PrimaryBtn>
+    </div>
+  );
+}
+
+/* ─── Fridge View ────────────────────────────────────────────────── */
+function FridgeView({items,members,me,onDelete}){
+  const [filterCat,setFilterCat]=useState("全て");
+  const [filterMember,setFilterMember]=useState("全員");
+
+  let filtered=items;
+  if (filterCat!=="全て")    filtered=filtered.filter(i=>i.category===filterCat);
+  if (filterMember!=="全員") filtered=filtered.filter(i=>i.addedBy===filterMember);
+
+  const soon   =items.filter(i=>getExpiry(i.expiry)==="soon").length;
+  const expired=items.filter(i=>getExpiry(i.expiry)==="expired").length;
+
+  return (
+    <div style={{flex:1,overflow:"auto",background:T.cream}}>
+
+      {/* Hero header */}
+      <div style={{
+        padding:"18px 22px 20px",
+        background:`linear-gradient(150deg,${T.beige} 0%,${T.sand}55 100%)`,
+        borderBottom:`1px solid ${T.sand}`,
+        position:"relative",overflow:"hidden",
+      }}>
+        {/* decorative circle */}
+        <div style={{position:"absolute",top:-40,right:-40,width:130,height:130,
+          borderRadius:"50%",background:`${T.terra}10`}}/>
+
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+          <div>
+            <img src={LOGO_SRC} alt="Stocky" style={{
+              height:52, objectFit:"contain",
+              filter:"drop-shadow(0 2px 6px rgba(193,122,74,0.2))",
+              marginBottom:2,
+            }}/>
+            <div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>
+              <Pill label={`${items.length} 品目`} color={T.olive}/>
+              {soon>0   && <Pill label={`⚠️ 期限間近 ${soon}`}   color={T.amber}/>}
+              {expired>0 && <Pill label={`❌ 期限切れ ${expired}`} color={T.red}/>}
+            </div>
+          </div>
+          {/* member bubbles */}
+          <div style={{display:"flex",marginTop:4}}>
+            {members.map((m,i)=>(
+              <div key={m.id} style={{marginLeft:i>0?-10:0}}>
+                <Avatar member={m} size={34} online/>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Member filter */}
+      <div style={{display:"flex",gap:8,padding:"12px 16px 4px",
+        overflowX:"auto",scrollbarWidth:"none"}}>
+        {["全員",...members.map(m=>m.name)].map(n=>{
+          const m=members.find(x=>x.name===n);
+          const active=filterMember===n;
+          return (
+            <button key={n} onClick={()=>setFilterMember(n)} style={{
+              flexShrink:0,padding:"6px 14px",borderRadius:20,border:"none",
+              cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:FONT_BODY,
+              background:active?m?.color||T.terra:T.beige,
+              color:active?T.white:T.barkMd,
+              transition:"all .2s",letterSpacing:.3,
+              display:"flex",alignItems:"center",gap:5,
+              boxShadow:active?`0 2px 8px ${T.shadow}`:"none",
+            }}>
+              {m&&<span style={{fontSize:13}}>{m.avatar}</span>}
+              {n}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Category filter — horizontal scroll pills */}
+      <div style={{display:"flex",gap:6,padding:"6px 16px 12px",
+        overflowX:"auto",scrollbarWidth:"none"}}>
+        {["全て",...Object.keys(FOOD_CATEGORIES)].map(c=>(
+          <button key={c} onClick={()=>setFilterCat(c)} style={{
+            flexShrink:0,padding:"5px 12px",borderRadius:20,border:"none",
+            cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:FONT_BODY,
+            background:filterCat===c?T.bark:T.beige,
+            color:filterCat===c?T.white:T.barkMd,
+            letterSpacing:.3,transition:"all .2s",
+          }}>
+            {FOOD_CATEGORIES[c]?.icon||"🌟"} {c}
+          </button>
+        ))}
+      </div>
+
+      {filtered.length===0 ? (
+        <div style={{textAlign:"center",padding:"56px 24px",color:T.fog}}>
+          <div style={{fontSize:52,marginBottom:14}}>🧺</div>
+          <p style={{fontFamily:FONT_DISPLAY,fontSize:17,
+            color:T.barkMd,margin:0}}>
+            食材がありません
+          </p>
+          <p style={{fontSize:13,marginTop:6,fontFamily:FONT_BODY,color:T.fog}}>
+            スキャンタブで写真を撮影してみてね
+          </p>
+        </div>
+      ) : (
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",
+          gap:12,padding:"0 14px 20px"}}>
+          {filtered.map((item,i)=>{
+            const member=members.find(m=>m.name===item.addedBy);
+            return (
+              <div key={item.id} style={{animation:`fadeUp .35s ease both`,
+                animationDelay:`${i*.04}s`}}>
+                <FoodCard item={item} member={member} onDelete={onDelete}/>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FoodCard({item,member,onDelete}){
+  const status=getExpiry(item.expiry);
+  const cat=FOOD_CATEGORIES[item.category]||FOOD_CATEGORIES["その他"];
+  const borderColor= status==="expired"?`${T.red}55`:status==="soon"?`${T.amber}55`:`${T.sand}`;
+  const expiryColor= status==="expired"?T.red:status==="soon"?T.amber:T.olive;
+  const expiryBg   = status==="expired"?`${T.red}18`:status==="soon"?`${T.amber}18`:`${T.olive}14`;
+
+  return (
+    <div className="card-hover" style={{
+      background:T.white,borderRadius:22,
+      boxShadow:`0 3px 16px ${T.shadow}`,
+      overflow:"hidden",border:`1.5px solid ${borderColor}`,
+    }}>
+      {/* top colour band */}
+      <div style={{
+        height:86,
+        background:`linear-gradient(135deg,${cat.color}18,${cat.color}40)`,
+        display:"flex",alignItems:"center",justifyContent:"center",
+        fontSize:40,position:"relative",
+      }}>
+        {cat.icon}
+        {/* Added-by badge */}
+        {member && (
+          <div style={{position:"absolute",top:8,right:8}}>
+            <Avatar member={member} size={22}/>
+          </div>
+        )}
+        {/* Freshness ribbon */}
+        {status!=="fresh" && (
+          <div style={{
+            position:"absolute",top:0,left:0,
+            background:status==="expired"?T.red:T.amber,
+            color:"#fff",fontSize:9,fontWeight:700,fontFamily:FONT_BODY,
+            padding:"3px 9px",borderBottomRightRadius:12,letterSpacing:.3,
+          }}>
+            {status==="expired"?"期限切れ":"もうすぐ"}
+          </div>
+        )}
+      </div>
+
+      <div style={{padding:"9px 11px 11px"}}>
+        <div style={{fontWeight:700,fontSize:13,color:T.bark,
+          fontFamily:FONT_BODY,whiteSpace:"nowrap",
+          overflow:"hidden",textOverflow:"ellipsis"}}>
+          {item.name}
+        </div>
+        <div style={{fontSize:11,color:T.fog,marginTop:2,fontFamily:FONT_BODY}}>
+          {item.quantity||"1個"}
+        </div>
+        <div style={{display:"flex",alignItems:"center",
+          justifyContent:"space-between",marginTop:8}}>
+          <span style={{
+            fontSize:10,fontWeight:700,color:expiryColor,
+            background:expiryBg,padding:"2px 8px",
+            borderRadius:10,fontFamily:FONT_BODY,
+          }}>
+            📅 {status==="fresh"?fmtDate(item.expiry):"期限 "+fmtDate(item.expiry)}
+          </span>
+          <button onClick={()=>onDelete(item.id)} style={{
+            background:"none",border:"none",cursor:"pointer",
+            fontSize:14,padding:2,color:T.fog,opacity:.6,
+            transition:"opacity .15s",
+          }}
+          onMouseEnter={e=>e.target.style.opacity=1}
+          onMouseLeave={e=>e.target.style.opacity=.6}>
+            🗑️
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Scan View ──────────────────────────────────────────────────── */
+function ScanView({onAddItems,me}){
+  const [phase,setPhase]=useState("idle");
+  const [imageData,setImageData]=useState(null);
+  const [scanned,setScanned]=useState([]);
+  const fileRef=useRef();
+
+  const handleFile=useCallback(file=>{
+    const r=new FileReader();
+    r.onload=e=>{setImageData(e.target.result);setPhase("preview");};
+    r.readAsDataURL(file);
+  },[]);
+
+  const doScan=async()=>{
+    setPhase("scanning");
+    const base64=imageData.split(",")[1];
+    const mediaType=imageData.split(";")[0].split(":")[1];
+    try {
+      const res=await fetch(ANTHROPIC_API,{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,
+          messages:[{role:"user",content:[
+            {type:"image",source:{type:"base64",media_type:mediaType,data:base64}},
+            {type:"text",text:`この画像に写っている食品・食材を全て特定してください。JSON形式のみで（説明不要）。{"items":[{"name":"食材名（日本語）","category":"野菜|果物|肉類|魚介類|乳製品|飲料|調味料|その他","quantity":"推定数量","estimatedExpiry":"YYYY-MM-DD","notes":"保存メモ（任意）"}]}`}
+          ]}]})
+      });
+      const data=await res.json();
+      const text=data.content.map(b=>b.text||"").join("");
+      const parsed=JSON.parse(text.replace(/```json|```/g,"").trim());
+      setScanned(parsed.items.map((item,i)=>({...item,id:`s${Date.now()}${i}`,selected:true})));
+      setPhase("results");
+    } catch(e){ setPhase("preview"); alert("スキャンに失敗しました。再度お試しください。"); }
+  };
+
+  if (phase==="idle") return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",
+      alignItems:"center",justifyContent:"center",
+      padding:32,gap:26,background:T.cream}}>
+
+      {/* Big camera circle */}
+      <div style={{
+        width:148,height:148,borderRadius:"50%",
+        background:`radial-gradient(circle at 35% 30%,${T.terraXlt},${T.sand})`,
+        display:"flex",alignItems:"center",justifyContent:"center",
+        fontSize:62,
+        boxShadow:`0 12px 40px ${T.shadowMd},0 4px 12px ${T.shadow}`,
+      }}>📷</div>
+
+      <div style={{textAlign:"center"}}>
+        <h2 style={{margin:0,fontFamily:FONT_DISPLAY,
+          fontSize:22,fontWeight:600,color:T.bark}}>
+          食材をスキャン
+        </h2>
+        <p style={{fontSize:13,color:T.barkMd,marginTop:8,lineHeight:1.8,fontFamily:FONT_BODY}}>
+          写真を撮るだけで AI が自動認識<br/>
+          あなたの名前で記録されます
+        </p>
+        <div style={{marginTop:12,display:"inline-flex",alignItems:"center",gap:8,
+          background:`${T.terra}14`,padding:"8px 16px",borderRadius:20,
+          border:`1px solid ${T.terraXlt}`}}>
+          <span style={{fontSize:18}}>{me.avatar}</span>
+          <span style={{fontSize:13,fontWeight:700,color:T.terra,fontFamily:FONT_BODY}}>
+            {me.name} として追加
+          </span>
+        </div>
+      </div>
+
+      <input ref={fileRef} type="file" accept="image/*" capture="environment"
+        style={{display:"none"}}
+        onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
+      <div style={{width:"100%"}}>
+        <PrimaryBtn onClick={()=>fileRef.current.click()}>
+          📸 写真を選択 / 撮影する
+        </PrimaryBtn>
+      </div>
+    </div>
+  );
+
+  if (phase==="preview") return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",background:T.cream}}>
+      <div style={{padding:"16px 22px 8px",fontFamily:FONT_DISPLAY,
+        fontSize:18,color:T.bark}}>プレビュー確認</div>
+      <WoodStripe/>
+      <img src={imageData} alt="" style={{width:"100%",maxHeight:310,
+        objectFit:"contain",background:T.beige}}/>
+      <div style={{padding:20,display:"flex",gap:12}}>
+        <button onClick={()=>{setPhase("idle");setImageData(null);}} style={{
+          flex:1,padding:"13px",borderRadius:18,
+          border:`1.5px solid ${T.sand}`,background:T.white,
+          fontWeight:700,cursor:"pointer",fontFamily:FONT_BODY,color:T.barkMd}}>
+          撮り直す
+        </button>
+        <button onClick={doScan} style={{
+          flex:2,padding:"13px",borderRadius:18,border:"none",
+          background:`linear-gradient(135deg,${T.terra},${T.barkMd})`,
+          color:T.white,fontWeight:700,cursor:"pointer",fontSize:15,fontFamily:FONT_BODY,
+          boxShadow:`0 4px 16px ${T.shadowMd}`}}>
+          🤖 AIでスキャン
+        </button>
+      </div>
+    </div>
+  );
+
+  if (phase==="scanning") return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",
+      alignItems:"center",justifyContent:"center",gap:20,background:T.cream}}>
+      <div style={{fontSize:64,animation:"pulse 1.2s ease-in-out infinite"}}>🔍</div>
+      <div style={{fontFamily:FONT_DISPLAY,
+        fontSize:19,color:T.bark}}>
+        食材を認識しています…
+      </div>
+      <div style={{display:"flex",gap:8,marginTop:4}}>
+        {[0,1,2].map(i=>(
+          <div key={i} style={{width:8,height:8,borderRadius:"50%",
+            background:T.terra,opacity:.6,
+            animation:`pulse ${.8+i*.2}s ease-in-out infinite`}}/>
+        ))}
+      </div>
+    </div>
+  );
+
+  /* results */
+  return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",background:T.cream}}>
+      <div style={{padding:"14px 22px 8px"}}>
+        <h2 style={{margin:0,fontFamily:FONT_DISPLAY,
+          fontSize:20,color:T.bark}}>
+          認識結果 🎯
+        </h2>
+        <p style={{margin:"4px 0 0",fontSize:12,color:T.fog,fontFamily:FONT_BODY}}>
+          追加したい食材をタップして選択してください
+        </p>
+      </div>
+      <WoodStripe/>
+      <div style={{flex:1,overflow:"auto",padding:"12px 16px",
+        display:"flex",flexDirection:"column",gap:10}}>
+        {scanned.map((item,i)=>{
+          const cat=FOOD_CATEGORIES[item.category]||FOOD_CATEGORIES["その他"];
+          return (
+            <div key={item.id}
+              className="card-hover"
+              onClick={()=>setScanned(p=>p.map(x=>x.id===item.id?{...x,selected:!x.selected}:x))}
+              style={{
+                background:item.selected?T.white:T.beige,
+                border:`2px solid ${item.selected?T.terra:T.sand}`,
+                borderRadius:18,padding:"13px 16px",cursor:"pointer",
+                display:"flex",alignItems:"center",gap:14,
+                animation:`fadeUp .3s ease both`,animationDelay:`${i*.05}s`,
+                transition:"border-color .2s,background .2s",
+              }}>
+              <div style={{fontSize:30}}>{cat.icon}</div>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:14,color:T.bark,fontFamily:FONT_BODY}}>
+                  {item.name}
+                </div>
+                <div style={{fontSize:12,color:T.fog,marginTop:3,fontFamily:FONT_BODY}}>
+                  {item.quantity} · 期限目安: {fmtDate(item.estimatedExpiry)}
+                </div>
+                {item.notes && (
+                  <div style={{fontSize:11,color:T.olive,marginTop:3,fontFamily:FONT_BODY}}>
+                    💡 {item.notes}
+                  </div>
+                )}
+              </div>
+              <div style={{
+                width:24,height:24,borderRadius:"50%",flexShrink:0,
+                background:item.selected?T.terra:T.sand,
+                display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:14,color:T.white,transition:"background .2s",
+              }}>
+                {item.selected?"✓":""}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{padding:"12px 16px 10px",display:"flex",gap:10}}>
+        <button onClick={()=>setPhase("idle")} style={{
+          flex:1,padding:"13px",borderRadius:18,
+          border:`1.5px solid ${T.sand}`,background:T.white,
+          fontWeight:700,cursor:"pointer",fontFamily:FONT_BODY,color:T.barkMd}}>
+          やり直す
+        </button>
+        <button onClick={()=>{
+          onAddItems(scanned.filter(i=>i.selected));
+          setPhase("idle");setImageData(null);setScanned([]);
+        }} style={{
+          flex:2,padding:"13px",borderRadius:18,border:"none",
+          background:`linear-gradient(135deg,${T.olive},${T.oliveLt})`,
+          color:T.white,fontWeight:700,cursor:"pointer",fontSize:14,
+          fontFamily:FONT_BODY,boxShadow:`0 4px 14px ${T.shadow}`}}>
+          ✅ 冷蔵庫に追加 ({scanned.filter(i=>i.selected).length}件)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Menu View ──────────────────────────────────────────────────── */
+function MenuView({items}){
+  const [loading,setLoading]=useState(false);
+  const [menus,setMenus]=useState(null);
+  const [sel,setSel]=useState(null);
+
+  const suggest=async()=>{
+    if (!items.length){alert("まず食材を登録してください！");return;}
+    setLoading(true);setMenus(null);
+    const list=items.map(i=>`${i.name}（${i.quantity||"適量"}、期限:${i.expiry||"不明"}）`).join("\n");
+    try {
+      const res=await fetch(ANTHROPIC_API,{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,
+          messages:[{role:"user",content:`以下の冷蔵庫の食材を使った献立を3つ提案してください。賞味期限が近い食材を優先的に使ってください。\n【食材】\n${list}\n\nJSON形式のみで：{"menus":[{"name":"料理名","emoji":"絵文字","description":"説明1〜2文","usedIngredients":["食材"],"cookingTime":"時間","difficulty":"簡単|普通|少し手間","recipe":"作り方（番号付き3〜5ステップ）"}]}`}]})
+      });
+      const data=await res.json();
+      const text=data.content.map(b=>b.text||"").join("");
+      setMenus(JSON.parse(text.replace(/```json|```/g,"").trim()).menus);
+    } catch(e){alert("失敗しました。再度お試しください。");}
+    finally{setLoading(false);}
+  };
+
+  if (sel) return (
+    <div style={{flex:1,overflow:"auto",background:T.cream}}>
+      <button onClick={()=>setSel(null)} style={{
+        background:"none",border:"none",padding:"16px 22px",
+        fontSize:15,cursor:"pointer",color:T.terra,
+        fontWeight:700,fontFamily:FONT_BODY,display:"flex",alignItems:"center",gap:4}}>
+        ‹ 献立一覧に戻る
+      </button>
+      <WoodStripe/>
+      <div style={{padding:"20px 22px 36px"}}>
+        <div style={{fontSize:56,textAlign:"center",marginBottom:8}}>{sel.emoji}</div>
+        <h2 style={{textAlign:"center",margin:"0 0 6px",
+          fontFamily:FONT_DISPLAY,fontSize:22,
+          fontWeight:600,color:T.bark}}>
+          {sel.name}
+        </h2>
+        <p style={{textAlign:"center",color:T.fog,margin:"0 0 16px",
+          fontSize:13,fontFamily:FONT_BODY,lineHeight:1.7}}>
+          {sel.description}
+        </p>
+        <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:20}}>
+          <Pill label={`⏱ ${sel.cookingTime}`} color={T.terra}/>
+          <Pill label={`📊 ${sel.difficulty}`}  color={T.olive}/>
+        </div>
+
+        {/* Ingredients card */}
+        <div style={{background:`${T.oliveXlt}44`,borderRadius:20,
+          padding:16,marginBottom:14,border:`1px solid ${T.oliveXlt}`}}>
+          <SectionTitle emoji="🥬">使用する食材</SectionTitle>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            {sel.usedIngredients.map((ing,i)=>(
+              <span key={i} style={{
+                background:T.white,color:T.olive,
+                padding:"4px 12px",borderRadius:12,fontSize:12,
+                fontWeight:700,fontFamily:FONT_BODY,
+                border:`1px solid ${T.oliveXlt}`,
+              }}>{ing}</span>
+            ))}
+          </div>
+        </div>
+
+        {/* Recipe card */}
+        <div style={{background:T.white,borderRadius:20,padding:16,
+          boxShadow:`0 3px 16px ${T.shadow}`,border:`1px solid ${T.beige}`}}>
+          <SectionTitle emoji="👨‍🍳">作り方</SectionTitle>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {sel.recipe.split("\n").filter(Boolean).map((s,i)=>(
+              <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                <span style={{fontSize:11,color:T.white,background:T.terra,
+                  borderRadius:"50%",width:20,height:20,display:"flex",
+                  alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1,fontWeight:700}}>
+                  {i+1}
+                </span>
+                <p style={{margin:0,fontSize:13,color:T.barkMd,lineHeight:1.7,fontFamily:FONT_BODY}}>
+                  {s.replace(/^\d+\.\s*/,"")}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",background:T.cream}}>
+      {/* header */}
+      <div style={{
+        padding:"18px 22px 16px",
+        background:`linear-gradient(150deg,${T.terraXlt}55,${T.beige})`,
+        borderBottom:`1px solid ${T.sand}`,
+      }}>
+        <p style={{margin:0,fontSize:11,fontWeight:700,color:T.terra,
+          letterSpacing:1.5,fontFamily:FONT_BODY,textTransform:"uppercase"}}>
+          TODAY'S IDEA
+        </p>
+        <h1 style={{margin:"2px 0 4px",fontFamily:FONT_DISPLAY,
+          fontSize:24,fontWeight:600,color:T.bark,letterSpacing:-.5}}>
+          今日の献立
+        </h1>
+        <p style={{margin:0,fontSize:13,color:T.barkMd,fontFamily:FONT_BODY}}>
+          冷蔵庫の食材を使い切るレシピを提案します
+        </p>
+      </div>
+
+      <div style={{padding:"16px 18px"}}>
+        <PrimaryBtn onClick={suggest} disabled={loading}
+          gradient={loading?undefined:`linear-gradient(135deg,${T.terra},${T.terraLt})`}>
+          {loading?"🤖 考えています…":"✨ 今日の献立を考えてもらう"}
+        </PrimaryBtn>
+        {items.length>0 && (
+          <p style={{textAlign:"center",fontSize:12,color:T.fog,margin:"8px 0 0",fontFamily:FONT_BODY}}>
+            {items.length}品目の食材から提案します
+          </p>
+        )}
+      </div>
+
+      {loading && (
+        <div style={{flex:1,display:"flex",flexDirection:"column",
+          alignItems:"center",justifyContent:"center",gap:16}}>
+          <div style={{fontSize:52,animation:"pulse 1.2s ease-in-out infinite"}}>🍳</div>
+          <p style={{fontFamily:FONT_DISPLAY,fontSize:17,
+            color:T.barkMd,margin:0}}>
+            おいしい献立を探しています…
+          </p>
+        </div>
+      )}
+
+      {menus && (
+        <div style={{flex:1,overflow:"auto",padding:"0 16px 20px",
+          display:"flex",flexDirection:"column",gap:12}}>
+          {menus.map((m,i)=>(
+            <div key={i} className="card-hover"
+              onClick={()=>setSel(m)}
+              style={{
+                background:T.white,borderRadius:22,padding:16,
+                boxShadow:`0 3px 16px ${T.shadow}`,
+                cursor:"pointer",display:"flex",gap:14,alignItems:"center",
+                border:`1.5px solid ${T.beige}`,
+                animation:`fadeUp .35s ease both`,animationDelay:`${i*.08}s`,
+              }}>
+              <div style={{
+                width:60,height:60,borderRadius:18,flexShrink:0,
+                background:`linear-gradient(135deg,${T.terraXlt},${T.beige})`,
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:32,
+              }}>{m.emoji}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:700,fontSize:15,color:T.bark,
+                  fontFamily:FONT_BODY}}>{m.name}</div>
+                <div style={{fontSize:12,color:T.fog,marginTop:4,lineHeight:1.5,
+                  fontFamily:FONT_BODY,overflow:"hidden",
+                  display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>
+                  {m.description}
+                </div>
+                <div style={{display:"flex",gap:8,marginTop:6}}>
+                  <span style={{fontSize:11,color:T.terra,fontWeight:700,fontFamily:FONT_BODY}}>
+                    ⏱ {m.cookingTime}
+                  </span>
+                  <span style={{fontSize:11,color:T.olive,fontWeight:700,fontFamily:FONT_BODY}}>
+                    📊 {m.difficulty}
+                  </span>
+                </div>
+              </div>
+              <span style={{color:T.sand,fontSize:20,flexShrink:0}}>›</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Share View ─────────────────────────────────────────────────── */
+function ShareView({members,me,activity,onAddMember,onRemoveMember}){
+  const [showAdd,setShowAdd]=useState(false);
+  const [newName,setNewName]=useState("");
+  const [newAvatar,setNewAvatar]=useState("🐱");
+  const [copied,setCopied]=useState(false);
+  const [inviteCode]=useState("KAZ-"+Math.random().toString(36).slice(2,5).toUpperCase());
+
+  return (
+    <div style={{flex:1,overflow:"auto",background:T.cream}}>
+      <div style={{
+        padding:"18px 22px 16px",
+        background:`linear-gradient(150deg,${T.oliveXlt}66,${T.beige})`,
+        borderBottom:`1px solid ${T.sand}`,
+      }}>
+        <p style={{margin:0,fontSize:11,fontWeight:700,color:T.olive,
+          letterSpacing:1.5,fontFamily:FONT_BODY,textTransform:"uppercase"}}>
+          FAMILY
+        </p>
+        <h1 style={{margin:"2px 0",fontFamily:FONT_DISPLAY,
+          fontSize:24,fontWeight:600,color:T.bark}}>
+          家族で共有
+        </h1>
+        <p style={{margin:0,fontSize:13,color:T.barkMd,fontFamily:FONT_BODY}}>
+          みんなの操作がリアルタイムに反映されます
+        </p>
+      </div>
+
+      {/* Members */}
+      <div style={{padding:"16px 16px 8px"}}>
+        <SectionTitle emoji="👥">メンバー ({members.length}人)</SectionTitle>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {members.map(m=>(
+            <div key={m.id} style={{
+              background:T.white,borderRadius:20,padding:"14px 16px",
+              display:"flex",alignItems:"center",gap:14,
+              boxShadow:`0 2px 12px ${T.shadow}`,border:`1.5px solid ${T.beige}`,
+            }}>
+              <div style={{width:48,height:48,borderRadius:"50%",
+                background:`${m.color}18`,border:`2.5px solid ${m.color}66`,
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>
+                {m.avatar}
+              </div>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <span style={{fontWeight:700,fontSize:15,color:T.bark,fontFamily:FONT_BODY}}>
+                    {m.name}
+                  </span>
+                  {m.id===me.id && (
+                    <span style={{fontSize:10,background:`${T.terra}18`,
+                      color:T.terra,padding:"2px 8px",borderRadius:10,fontWeight:700}}>
+                      あなた
+                    </span>
+                  )}
+                  {m.role==="owner" && (
+                    <span style={{fontSize:10,background:`${T.amber}18`,
+                      color:T.amber,padding:"2px 8px",borderRadius:10,fontWeight:700}}>
+                      管理者
+                    </span>
+                  )}
+                </div>
+                <div style={{fontSize:11,color:T.fog,marginTop:3,
+                  fontFamily:FONT_BODY,display:"flex",alignItems:"center",gap:5}}>
+                  <div style={{width:7,height:7,borderRadius:"50%",background:"#6BAA7A"}}/>
+                  オンライン
+                </div>
+              </div>
+              {m.id!==me.id && (
+                <button onClick={()=>onRemoveMember(m.id)} style={{
+                  background:`${T.red}14`,border:"none",borderRadius:12,
+                  padding:"7px 12px",cursor:"pointer",fontSize:12,
+                  color:T.red,fontWeight:700,fontFamily:FONT_BODY}}>
+                  削除
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Add member */}
+      <div style={{padding:"0 16px 12px"}}>
+        {!showAdd ? (
+          <button onClick={()=>setShowAdd(true)} style={{
+            width:"100%",padding:"13px",borderRadius:18,
+            border:`2px dashed ${T.sand}`,background:"none",
+            fontWeight:700,fontSize:14,color:T.barkMd,
+            cursor:"pointer",fontFamily:FONT_BODY,letterSpacing:.3}}>
+            ＋ メンバーを追加する
+          </button>
+        ) : (
+          <div style={{background:T.white,borderRadius:20,padding:18,
+            boxShadow:`0 4px 20px ${T.shadowMd}`,border:`1.5px solid ${T.sand}`}}>
+            <p style={{margin:"0 0 12px",fontWeight:700,fontSize:14,
+              color:T.bark,fontFamily:FONT_BODY}}>新しいメンバーを追加</p>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(8,1fr)",gap:6,marginBottom:14}}>
+              {MEMBER_AVATARS.map(a=>(
+                <button key={a} onClick={()=>setNewAvatar(a)} style={{
+                  fontSize:24,borderRadius:14,width:"100%",aspectRatio:"1",
+                  cursor:"pointer",border:"none",
+                  background: newAvatar===a
+                    ? `radial-gradient(circle at 35% 30%,${T.terraXlt},${T.terra}88)`
+                    : T.beige,
+                  boxShadow: newAvatar===a ? `0 3px 8px ${T.terra}44` : "none",
+                  transform: newAvatar===a ? "scale(1.12)" : "scale(1)",
+                  transition:"all .18s",
+                }}>
+                  {a}
+                </button>
+              ))}
+            </div>
+            <input value={newName} onChange={e=>setNewName(e.target.value)}
+              placeholder="ニックネームを入力…"
+              style={{width:"100%",padding:"13px 15px",borderRadius:14,
+                border:`1.5px solid ${T.sand}`,fontSize:15,fontFamily:FONT_BODY,
+                outline:"none",background:T.cream,color:T.bark,marginBottom:12,
+                boxShadow:`inset 0 2px 5px ${T.shadow}`}}/>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>{setShowAdd(false);setNewName("");}} style={{
+                flex:1,padding:"12px",borderRadius:14,
+                border:`1.5px solid ${T.sand}`,background:T.white,
+                fontWeight:700,cursor:"pointer",fontFamily:FONT_BODY,color:T.barkMd}}>
+                キャンセル
+              </button>
+              <button disabled={!newName.trim()} onClick={()=>{
+                onAddMember({id:"m-"+Date.now(),name:newName.trim(),
+                  avatar:newAvatar,color:MEMBER_COLORS[members.length%MEMBER_COLORS.length],
+                  role:"member"});
+                setShowAdd(false);setNewName("");
+              }} style={{
+                flex:2,padding:"12px",borderRadius:14,border:"none",
+                background:newName.trim()?`linear-gradient(135deg,${T.terra},${T.barkMd})`:T.sand,
+                color:T.white,fontWeight:700,
+                cursor:newName.trim()?"pointer":"not-allowed",fontFamily:FONT_BODY}}>
+                追加する
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Invite code */}
+      <div style={{padding:"0 16px 12px"}}>
+        <div style={{
+          background:`linear-gradient(135deg,${T.bark},${T.barkMd})`,
+          borderRadius:22,padding:18,color:T.cream,
+          boxShadow:`0 6px 24px ${T.shadowMd}`,
+        }}>
+          <p style={{margin:"0 0 4px",fontWeight:700,fontSize:14,
+            fontFamily:FONT_BODY,letterSpacing:.5}}>🔗 招待コード</p>
+          <p style={{margin:"0 0 14px",fontSize:12,opacity:.7,fontFamily:FONT_BODY}}>
+            家族・パートナーにコードを共有しよう
+          </p>
+          <div style={{
+            background:"rgba(255,255,255,0.12)",borderRadius:14,
+            padding:"14px 16px",display:"flex",
+            alignItems:"center",justifyContent:"space-between",
+          }}>
+            <span style={{fontFamily:FONT_DISPLAY,fontSize:24,letterSpacing:5,fontWeight:600}}>
+              {inviteCode}
+            </span>
+            <button onClick={()=>{
+              navigator.clipboard?.writeText(inviteCode);
+              setCopied(true);setTimeout(()=>setCopied(false),2000);
+            }} style={{
+              background:"rgba(255,255,255,0.18)",border:"none",borderRadius:10,
+              padding:"8px 14px",color:T.cream,fontWeight:700,
+              cursor:"pointer",fontSize:12,fontFamily:FONT_BODY,transition:"all .2s"}}>
+              {copied?"✅ コピー済":"📋 コピー"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Activity */}
+      <div style={{padding:"0 16px 28px"}}>
+        <SectionTitle emoji="📋">最近の操作</SectionTitle>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {activity.map(a=>{
+            const m=members.find(x=>x.id===a.memberId)||{avatar:"👤",color:T.fog,name:a.memberName};
+            return (
+              <div key={a.id} style={{
+                display:"flex",alignItems:"center",gap:12,
+                padding:"11px 14px",background:T.white,borderRadius:16,
+                boxShadow:`0 2px 8px ${T.shadow}`,border:`1px solid ${T.beige}`,
+              }}>
+                <Avatar member={m} size={28}/>
+                <div style={{flex:1,fontSize:13,fontFamily:FONT_BODY,lineHeight:1.5}}>
+                  <b style={{color:T.bark}}>{a.memberName}</b>
+                  <span style={{color:T.fog}}> が </span>
+                  <b style={{color:a.action==="追加"?T.terra:T.red}}>{a.item}</b>
+                  <span style={{color:T.fog}}> を{a.action}しました</span>
+                </div>
+                <span style={{fontSize:11,color:T.fog,flexShrink:0,fontFamily:FONT_BODY}}>
+                  {relTime(a.time)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Shopping View ──────────────────────────────────────────────── */
+function ShoppingView({shopping,members,me,onUpdate}){
+  const [newItem,setNewItem]=useState("");
+  const pending=shopping.filter(s=>!s.done);
+  const done=shopping.filter(s=>s.done);
+
+  const add=()=>{
+    if (!newItem.trim()) return;
+    onUpdate([...shopping,{id:"s-"+Date.now(),name:newItem.trim(),
+      addedBy:me.name,addedById:me.id,done:false}]);
+    setNewItem("");
+  };
+
+  return (
+    <div style={{flex:1,overflow:"auto",background:T.cream}}>
+      <div style={{
+        padding:"18px 22px 16px",
+        background:`linear-gradient(150deg,${T.sand}66,${T.beige})`,
+        borderBottom:`1px solid ${T.sand}`,
+      }}>
+        <p style={{margin:0,fontSize:11,fontWeight:700,color:T.barkMd,
+          letterSpacing:1.5,fontFamily:FONT_BODY,textTransform:"uppercase"}}>
+          SHARED LIST
+        </p>
+        <h1 style={{margin:"2px 0",fontFamily:FONT_DISPLAY,
+          fontSize:24,fontWeight:600,color:T.bark}}>
+          お買い物リスト
+        </h1>
+        <p style={{margin:0,fontSize:13,color:T.barkMd,fontFamily:FONT_BODY}}>
+          家族みんなでリアルタイム共有できます
+        </p>
+      </div>
+
+      {/* Input */}
+      <div style={{padding:"14px 16px"}}>
+        <div style={{display:"flex",gap:10}}>
+          <input value={newItem} onChange={e=>setNewItem(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&add()}
+            placeholder="買うものを追加…"
+            style={{flex:1,padding:"13px 16px",borderRadius:18,
+              border:`1.5px solid ${T.sand}`,fontSize:15,fontFamily:FONT_BODY,
+              outline:"none",background:T.white,color:T.bark,
+              boxShadow:`inset 0 2px 6px ${T.shadow}`}}/>
+          <button onClick={add} style={{
+            padding:"13px 20px",borderRadius:18,border:"none",
+            background:`linear-gradient(135deg,${T.terra},${T.barkMd})`,
+            color:T.white,fontWeight:900,cursor:"pointer",fontSize:20,
+            boxShadow:`0 4px 14px ${T.shadow}`}}>
+            ＋
+          </button>
+        </div>
+      </div>
+
+      {/* Pending */}
+      {pending.length>0 && (
+        <div style={{padding:"0 16px 10px"}}>
+          <SectionTitle emoji="📝">未購入 ({pending.length})</SectionTitle>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {pending.map((s,i)=>{
+              const m=members.find(x=>x.id===s.addedById)||{avatar:"👤",color:T.fog,name:s.addedBy};
+              return (
+                <div key={s.id} className="card-hover"
+                  style={{
+                    background:T.white,borderRadius:18,
+                    padding:"13px 16px",display:"flex",alignItems:"center",gap:12,
+                    boxShadow:`0 2px 12px ${T.shadow}`,border:`1.5px solid ${T.beige}`,
+                    animation:`fadeUp .3s ease both`,animationDelay:`${i*.04}s`,
+                  }}>
+                  <button onClick={()=>onUpdate(shopping.map(x=>x.id===s.id?{...x,done:!x.done}:x))} style={{
+                    width:26,height:26,borderRadius:"50%",
+                    border:`2px solid ${T.sand}`,background:"none",cursor:"pointer",flexShrink:0}}>
+                  </button>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,fontSize:14,color:T.bark,fontFamily:FONT_BODY}}>
+                      {s.name}
+                    </div>
+                    <div style={{fontSize:11,color:T.fog,marginTop:3,
+                      display:"flex",alignItems:"center",gap:5,fontFamily:FONT_BODY}}>
+                      <Avatar member={m} size={14}/>{s.addedBy}が追加
+                    </div>
+                  </div>
+                  <button onClick={()=>onUpdate(shopping.filter(x=>x.id!==s.id))} style={{
+                    background:"none",border:"none",cursor:"pointer",
+                    fontSize:16,color:T.sand,transition:"color .15s"}}
+                  onMouseEnter={e=>e.target.style.color=T.red}
+                  onMouseLeave={e=>e.target.style.color=T.sand}>
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Done */}
+      {done.length>0 && (
+        <div style={{padding:"4px 16px 28px"}}>
+          <SectionTitle emoji="✅">購入済み ({done.length})</SectionTitle>
+          <div style={{display:"flex",flexDirection:"column",gap:6,opacity:.65}}>
+            {done.map(s=>(
+              <div key={s.id} style={{
+                background:T.beige,borderRadius:16,padding:"11px 16px",
+                display:"flex",alignItems:"center",gap:12}}>
+                <button onClick={()=>onUpdate(shopping.map(x=>x.id===s.id?{...x,done:!x.done}:x))} style={{
+                  width:26,height:26,borderRadius:"50%",border:"none",
+                  background:T.olive,cursor:"pointer",fontSize:14,color:T.white,
+                  display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  ✓
+                </button>
+                <div style={{flex:1,fontWeight:600,fontSize:14,
+                  color:T.fog,textDecoration:"line-through",fontFamily:FONT_BODY}}>
+                  {s.name}
+                </div>
+                <button onClick={()=>onUpdate(shopping.filter(x=>x.id!==s.id))} style={{
+                  background:"none",border:"none",cursor:"pointer",
+                  fontSize:14,color:T.sand}}>✕</button>
+              </div>
+            ))}
+          </div>
+          <button onClick={()=>onUpdate(shopping.filter(s=>!s.done))} style={{
+            marginTop:12,width:"100%",padding:"11px",borderRadius:14,border:"none",
+            background:`${T.red}14`,color:T.red,fontWeight:700,
+            cursor:"pointer",fontSize:13,fontFamily:FONT_BODY}}>
+            購入済みをすべて削除
+          </button>
+        </div>
+      )}
+
+      {pending.length===0&&done.length===0 && (
+        <div style={{textAlign:"center",padding:"52px 24px",color:T.fog}}>
+          <div style={{fontSize:50,marginBottom:14}}>🧺</div>
+          <p style={{fontFamily:FONT_DISPLAY,fontSize:17,
+            color:T.barkMd,margin:0}}>リストは空です</p>
+          <p style={{fontSize:13,marginTop:6,fontFamily:FONT_BODY}}>
+            上の入力欄から追加してください
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── App Root ───────────────────────────────────────────────────── */
+export default function App(){
+  const [setup,setSetup]=useState(true);
+  const [me,setMe]=useState(null);
+  const [members,setMembers]=useState([]);
+  const [items,setItems]=useState([]);
+  const [shopping,setShopping]=useState([]);
+  const [activity,setActivity]=useState([]);
+  const [tab,setTab]=useState("fridge");
+
+  const handleSetup=({members:m,me:myInfo})=>{
+    setMembers(m);setMe(myInfo);
+    const demo=m.length>1;
+    setItems(demo?DEMO_ITEMS:[]);
+    setShopping(demo?DEMO_SHOPPING:[]);
+    setActivity(demo?DEMO_ACTIVITY:[]);
+    setSetup(false);
+  };
+
+  const addItems=newItems=>{
+    const mapped=newItems.map(i=>({
+      id:i.id,name:i.name,category:i.category,quantity:i.quantity,
+      expiry:i.estimatedExpiry,addedBy:me.name,imageData:null,notes:i.notes,
+    }));
+    setItems(p=>[...p,...mapped]);
+    setActivity(p=>[
+      ...mapped.map(i=>({id:"a-"+Date.now()+Math.random(),
+        memberId:me.id,memberName:me.name,action:"追加",
+        item:i.name,time:new Date().toISOString()})),
+      ...p,
+    ]);
+    setTab("fridge");
+  };
+
+  const deleteItem=id=>{
+    const item=items.find(i=>i.id===id);
+    setItems(p=>p.filter(i=>i.id!==id));
+    if (item) setActivity(p=>[{
+      id:"a-"+Date.now(),memberId:me.id,memberName:me.name,
+      action:"消費",item:item.name,time:new Date().toISOString(),
+    },...p]);
+  };
+
+  if (setup) return (
+    <div style={{maxWidth:390,margin:"0 auto",height:"100vh",
+      display:"flex",flexDirection:"column",background:T.cream,
+      boxShadow:`0 0 60px ${T.shadowMd}`,overflow:"hidden"}}>
+      <GStyles/>
+      <StatusBar/>
+      <WoodStripe/>
+      <SetupScreen onComplete={handleSetup}/>
+    </div>
+  );
+
+  return (
+    <div style={{maxWidth:390,margin:"0 auto",height:"100vh",
+      display:"flex",flexDirection:"column",background:T.cream,
+      fontFamily:FONT_BODY,
+      boxShadow:`0 0 60px ${T.shadowMd}`,overflow:"hidden"}}>
+      <GStyles/>
+      <StatusBar/>
+      <WoodStripe/>
+      <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+        {tab==="fridge" && <FridgeView items={items} members={members} me={me} onDelete={deleteItem}/>}
+        {tab==="scan"   && <ScanView onAddItems={addItems} me={me}/>}
+        {tab==="menu"   && <MenuView items={items}/>}
+        {tab==="share"  && <ShareView members={members} me={me} activity={activity}
+          onAddMember={m=>setMembers(p=>[...p,m])}
+          onRemoveMember={id=>setMembers(p=>p.filter(m=>m.id!==id))}/>}
+        {tab==="shop"   && <ShoppingView shopping={shopping} members={members} me={me} onUpdate={setShopping}/>}
+      </div>
+      <TabBar tab={tab} setTab={setTab} badge={shopping.filter(s=>!s.done).length}/>
+    </div>
+    </>
+  );
+}
